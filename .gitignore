@@ -22,4 +22,7 @@ Thumbs.db
 
 # Data artifacts
 *.duckdb
-dataprojet10/Kestra/output/
+Kestra/output/
+
+# Archive and legacy folder
+old/

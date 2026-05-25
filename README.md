@@ -92,7 +92,7 @@ Il ne s'agit **pas** d'une suite de tests `pytest` séparée : si une assertion 
 
 1. Ouvre PowerShell dans le dossier du projet :
    ```powershell
-   cd "c:\Users\karap\OpenClassRooms\projet10\dataprojet10"
+   cd "c:\Users\karap\OpenClassRooms\projet10"
    ```
 
 2. Crée un environnement virtuel Python :
