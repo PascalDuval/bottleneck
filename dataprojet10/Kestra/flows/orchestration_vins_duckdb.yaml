@@ -1,0 +1,1038 @@
+id: orchestration_vins_duckdb
+namespace: open_class_room.kestra
+
+description: >
+  Workflow complet vins avec topologie complète, traitements parallèles,
+  tests visibles dans Kestra, pytest parallèle, dashboard métrique, exports
+  et récapitulatif final.
+
+inputs:
+  - id: erp_file
+    type: FILE
+  - id: web_file
+    type: FILE
+  - id: liaison_file
+    type: FILE
+
+triggers:
+  - id: cron_monthly
+    type: io.kestra.plugin.core.trigger.Schedule
+    cron: "0 9 15 * *"
+    timezone: Europe/Paris
+
+#errors:
+ # - id: alert_email_failure
+  #  type: io.kestra.plugin.notifications.mail.MailSend
+  #  host: smtp.protonmail.ch
+  # port: 587
+  # username: dao-zest@proton.me
+  #  password: "{{ secret('PROTONMAIL_PASSWORD') }}"
+  #  from: dao-zest@proton.me
+  #  to: dao-zest@proton.me
+  #  subject: " Kestra - Échec du workflow {{ flow.id }}"
+  #  textContent: |
+  #   Le workflow Kestra a échoué.
+
+    #  Namespace : {{ flow.namespace }}
+    #  Workflow  : {{ flow.id }}
+    #  Execution : {{ execution.id }}
+    #  State     : {{ execution.state.current }}
+    #  Date      : {{ execution.startDate }}
+
+    #  Consultez les logs dans Kestra pour le détail.
+
+tasks:
+  # ============================================================
+  # PHASE 1 — INGESTION / VALIDATION
+  # ============================================================
+  - id: validate_inputs
+    type: io.kestra.plugin.scripts.python.Script
+    containerImage: python:3.11-slim
+    retry:
+      type: constant
+      interval: PT5S
+      maxAttempt: 4
+    beforeCommands:
+      - pip install pandas==1.5.3 numpy==1.24.4 openpyxl
+    inputFiles:
+      erp.xlsx: "{{ inputs.erp_file }}"
+      web.xlsx: "{{ inputs.web_file }}"
+      liaison.xlsx: "{{ inputs.liaison_file }}"
+    outputFiles:
+      - audit/input_manifest.json
+    script: |
+      import json
+      from pathlib import Path
+      import pandas as pd
+
+      Path("audit").mkdir(parents=True, exist_ok=True)
+
+      expected = {
+          "erp.xlsx": ["product_id", "onsale_web", "price", "stock_quantity", "stock_status"],
+          "web.xlsx": ["sku", "post_title", "post_type", "total_sales"],
+          "liaison.xlsx": ["product_id", "id_web"]
+      }
+
+      manifest = {}
+
+      for fname, required_cols in expected.items():
+          df = pd.read_excel(fname)
+          if df.empty:
+              raise ValueError(f"{fname} est vide")
+          missing = [c for c in required_cols if c not in df.columns]
+          if missing:
+              raise ValueError(f"{fname} : colonnes manquantes {missing}")
+
+          manifest[fname] = {
+              "rows": int(len(df)),
+              "columns": list(df.columns)
+          }
+
+          print(f"✅ {fname} chargé : {len(df)} lignes")
+          print(f"Colonnes {fname}: {list(df.columns)}")
+
+      with open("audit/input_manifest.json", "w", encoding="utf-8") as f:
+          json.dump(manifest, f, indent=2, ensure_ascii=False)
+
+  - id: test_input_files
+    type: io.kestra.plugin.scripts.python.Script
+    containerImage: python:3.11-slim
+    retry:
+      type: constant
+      interval: PT5S
+      maxAttempt: 4
+    inputFiles:
+      manifest.json: "{{ outputs.validate_inputs.outputFiles['audit/input_manifest.json'] }}"
+    script: |
+      import json
+
+      manifest = json.load(open("manifest.json", encoding="utf-8"))
+
+      assert "erp.xlsx" in manifest
+      assert "web.xlsx" in manifest
+      assert "liaison.xlsx" in manifest
+
+      for fname, meta in manifest.items():
+          assert meta["rows"] > 0, f"{fname} sans lignes"
+
+      print("✅ Test de présence / format / lisibilité réussi")
+      print(json.dumps(manifest, indent=2, ensure_ascii=False))
+
+  - id: global_duplicate_scan
+    type: io.kestra.plugin.scripts.python.Script
+    containerImage: python:3.11-slim
+    retry:
+      type: constant
+      interval: PT5S
+      maxAttempt: 4
+    beforeCommands:
+      - pip install pandas==1.5.3 numpy==1.24.4 openpyxl
+    inputFiles:
+      erp.xlsx: "{{ inputs.erp_file }}"
+      web.xlsx: "{{ inputs.web_file }}"
+      liaison.xlsx: "{{ inputs.liaison_file }}"
+    outputFiles:
+      - audit/global_duplicates.json
+    script: |
+      import json
+      from pathlib import Path
+      import pandas as pd
+
+      Path("audit").mkdir(parents=True, exist_ok=True)
+
+      erp = pd.read_excel("erp.xlsx")
+      web = pd.read_excel("web.xlsx")
+      liaison = pd.read_excel("liaison.xlsx")
+
+      web_products = web[web["post_type"] == "product"].copy() if "post_type" in web.columns else web.copy()
+
+      result = {
+          "erp_duplicates_raw": int(erp["product_id"].duplicated().sum()) if "product_id" in erp.columns else 0,
+          "web_duplicates_raw": int(web_products["sku"].duplicated().sum()) if "sku" in web_products.columns else 0,
+          "liaison_duplicates_raw": int(liaison["product_id"].duplicated().sum()) if "product_id" in liaison.columns else 0
+      }
+
+      with open("audit/global_duplicates.json", "w", encoding="utf-8") as f:
+          json.dump(result, f, indent=2, ensure_ascii=False)
+
+      print("✅ Contrôle global des doublons effectué")
+      print(json.dumps(result, indent=2, ensure_ascii=False))
+
+  # ============================================================
+  # PHASE 2 — TRAITEMENTS PARALLÈLES
+  # ============================================================
+  - id: parallel_cleaning
+    type: io.kestra.plugin.core.flow.Parallel
+    tasks:
+      - id: clean_erp
+        type: io.kestra.plugin.scripts.python.Script
+        containerImage: python:3.11-slim
+        retry:
+          type: constant
+          interval: PT5S
+          maxAttempt: 4
+        beforeCommands:
+          - pip install pandas==1.5.3 numpy==1.24.4 duckdb openpyxl
+        inputFiles:
+          erp.xlsx: "{{ inputs.erp_file }}"
+        outputFiles:
+          - data/erp_clean.csv
+          - audit/erp_metrics.json
+        script: |
+          import json
+          from pathlib import Path
+          import pandas as pd
+          import duckdb
+
+          Path("data").mkdir(parents=True, exist_ok=True)
+          Path("audit").mkdir(parents=True, exist_ok=True)
+
+          raw = pd.read_excel("erp.xlsx")
+          raw_rows = int(len(raw))
+
+          con = duckdb.connect()
+          con.register("t", raw)
+
+          con.execute("""
+          CREATE OR REPLACE TABLE clean AS
+          WITH typed AS (
+            SELECT
+              TRY_CAST(product_id AS BIGINT) AS product_id,
+              TRY_CAST(onsale_web AS BIGINT) AS onsale_web,
+              TRY_CAST(price AS DOUBLE) AS price,
+              TRY_CAST(stock_quantity AS BIGINT) AS stock_quantity,
+              TRIM(CAST(stock_status AS VARCHAR)) AS stock_status
+            FROM t
+          ),
+          filtered AS (
+            SELECT *
+            FROM typed
+            WHERE product_id IS NOT NULL
+              AND onsale_web IS NOT NULL
+              AND price IS NOT NULL
+              AND stock_quantity IS NOT NULL
+              AND stock_status IS NOT NULL
+              AND stock_status <> ''
+          ),
+          ranked AS (
+            SELECT *,
+                   ROW_NUMBER() OVER (PARTITION BY product_id ORDER BY product_id) AS rn
+            FROM filtered
+          )
+          SELECT product_id, onsale_web, price, stock_quantity, stock_status
+          FROM ranked
+          WHERE rn = 1
+          """)
+
+          clean = con.execute("SELECT * FROM clean").df()
+          clean.to_csv("data/erp_clean.csv", index=False)
+
+          metrics = {
+            "raw_rows": raw_rows,
+            "clean_rows": int(len(clean)),
+            "duplicates_remaining": int(clean["product_id"].duplicated().sum()) if not clean.empty else 0,
+            "null_critical": int(clean[["product_id","onsale_web","price","stock_quantity","stock_status"]].isnull().sum().sum()) if not clean.empty else 0,
+            "negative_price": int((clean["price"] < 0).sum()) if "price" in clean.columns else 0,
+            "negative_stock": int((clean["stock_quantity"] < 0).sum()) if "stock_quantity" in clean.columns else 0
+          }
+
+          with open("audit/erp_metrics.json", "w", encoding="utf-8") as f:
+              json.dump(metrics, f, indent=2, ensure_ascii=False)
+
+          print("=== ERP METRICS ===")
+          print(json.dumps(metrics, indent=2, ensure_ascii=False))
+
+      - id: clean_web
+        type: io.kestra.plugin.scripts.python.Script
+        containerImage: python:3.11-slim
+        retry:
+          type: constant
+          interval: PT5S
+          maxAttempt: 4
+        beforeCommands:
+          - pip install pandas==1.5.3 numpy==1.24.4 duckdb openpyxl
+        inputFiles:
+          web.xlsx: "{{ inputs.web_file }}"
+        outputFiles:
+          - data/web_products_only.csv
+          - data/web_clean.csv
+          - audit/web_metrics.json
+        script: |
+          import json
+          from pathlib import Path
+          import pandas as pd
+          import duckdb
+
+          Path("data").mkdir(parents=True, exist_ok=True)
+          Path("audit").mkdir(parents=True, exist_ok=True)
+
+          raw = pd.read_excel("web.xlsx")
+          raw_rows = int(len(raw))
+
+          raw = raw.copy()
+          raw["post_type"] = raw["post_type"].astype("string").str.strip()
+          raw["sku"] = raw["sku"].astype("string").str.strip()
+          raw["post_title"] = raw["post_title"].astype("string").str.strip()
+          raw["total_sales"] = pd.to_numeric(raw["total_sales"], errors="coerce")
+
+          raw["sku"] = raw["sku"].replace(["", "nan", "None", "<NA>"], pd.NA)
+          raw["post_title"] = raw["post_title"].replace(["", "nan", "None", "<NA>"], pd.NA)
+
+          con = duckdb.connect()
+          con.register("t", raw)
+
+          con.execute("""
+          CREATE OR REPLACE TABLE products_only AS
+          SELECT *
+          FROM t
+          WHERE post_type = 'product'
+          """)
+
+          con.execute("""
+          CREATE OR REPLACE TABLE clean AS
+          WITH filtered AS (
+            SELECT *
+            FROM products_only
+            WHERE sku IS NOT NULL
+              AND post_title IS NOT NULL
+              AND total_sales IS NOT NULL
+          ),
+          ranked AS (
+            SELECT *,
+                   ROW_NUMBER() OVER (
+                     PARTITION BY sku
+                     ORDER BY
+                       CASE WHEN CAST(post_status AS VARCHAR) = 'publish' THEN 1 ELSE 2 END,
+                       total_sales DESC
+                   ) AS rn
+            FROM filtered
+          )
+          SELECT *
+          FROM ranked
+          WHERE rn = 1
+          """)
+
+          products_only = con.execute("SELECT * FROM products_only").df()
+          clean = con.execute("SELECT * FROM clean").df()
+
+          products_only.to_csv("data/web_products_only.csv", index=False)
+          clean.to_csv("data/web_clean.csv", index=False)
+
+          metrics = {
+            "raw_rows": raw_rows,
+            "products_rows_after_filter": int(len(products_only)),
+            "clean_rows_after_dedup": int(len(clean)),
+            "duplicates_remaining": int(clean["sku"].duplicated().sum()) if "sku" in clean.columns else 0,
+            "sku_null_or_empty": int(clean["sku"].isnull().sum()) + int((clean["sku"].astype(str).str.strip() == "").sum()) if "sku" in clean.columns else 0,
+            "non_product_rows_after_clean": int((clean["post_type"].astype(str).str.strip() != "product").sum()) if "post_type" in clean.columns else 0
+          }
+
+          with open("audit/web_metrics.json", "w", encoding="utf-8") as f:
+              json.dump(metrics, f, indent=2, ensure_ascii=False)
+
+          print("=== WEB METRICS ===")
+          print(json.dumps(metrics, indent=2, ensure_ascii=False))
+
+      - id: clean_liaison
+        type: io.kestra.plugin.scripts.python.Script
+        containerImage: python:3.11-slim
+        retry:
+          type: constant
+          interval: PT5S
+          maxAttempt: 4
+        beforeCommands:
+          - pip install pandas==1.5.3 numpy==1.24.4 duckdb openpyxl
+        inputFiles:
+          liaison.xlsx: "{{ inputs.liaison_file }}"
+        outputFiles:
+          - data/liaison_clean.csv
+          - audit/liaison_metrics.json
+        script: |
+          import json
+          from pathlib import Path
+          import pandas as pd
+          import duckdb
+
+          Path("data").mkdir(parents=True, exist_ok=True)
+          Path("audit").mkdir(parents=True, exist_ok=True)
+
+          raw = pd.read_excel("liaison.xlsx")
+          raw_rows = int(len(raw))
+
+          con = duckdb.connect()
+          con.register("t", raw)
+
+          con.execute("""
+          CREATE OR REPLACE TABLE clean AS
+          WITH typed AS (
+            SELECT
+              TRY_CAST(product_id AS BIGINT) AS product_id,
+              TRIM(CAST(id_web AS VARCHAR)) AS id_web
+            FROM t
+          ),
+          filtered AS (
+            SELECT *
+            FROM typed
+            WHERE product_id IS NOT NULL
+              AND id_web IS NOT NULL
+              AND id_web <> ''
+          ),
+          ranked AS (
+            SELECT *,
+                   ROW_NUMBER() OVER (PARTITION BY product_id ORDER BY product_id) AS rn
+            FROM filtered
+          )
+          SELECT product_id, id_web
+          FROM ranked
+          WHERE rn = 1
+          """)
+
+          clean = con.execute("SELECT * FROM clean").df()
+          clean.to_csv("data/liaison_clean.csv", index=False)
+
+          metrics = {
+            "raw_rows": raw_rows,
+            "clean_rows": int(len(clean)),
+            "duplicates_remaining": int(clean["product_id"].duplicated().sum()) if "product_id" in clean.columns else 0,
+            "null_keys": int(clean[["product_id","id_web"]].isnull().sum().sum()) if not clean.empty else 0
+          }
+
+          with open("audit/liaison_metrics.json", "w", encoding="utf-8") as f:
+              json.dump(metrics, f, indent=2, ensure_ascii=False)
+
+          print("=== LIAISON METRICS ===")
+          print(json.dumps(metrics, indent=2, ensure_ascii=False))
+
+  # ============================================================
+  # PHASE 2 — TESTS VISIBLES DANS KESTRA
+  # ============================================================
+  - id: tests_quality
+    type: io.kestra.plugin.core.flow.Parallel
+    tasks:
+      - id: test_absence_doublons
+        type: io.kestra.plugin.scripts.python.Script
+        containerImage: python:3.11-slim
+        retry:
+          type: constant
+          interval: PT5S
+          maxAttempt: 4
+        beforeCommands:
+          - pip install pandas==1.5.3 numpy==1.24.4
+        inputFiles:
+          erp.csv: "{{ outputs.clean_erp.outputFiles['data/erp_clean.csv'] }}"
+          web.csv: "{{ outputs.clean_web.outputFiles['data/web_clean.csv'] }}"
+          liaison.csv: "{{ outputs.clean_liaison.outputFiles['data/liaison_clean.csv'] }}"
+        script: |
+          import pandas as pd
+
+          erp = pd.read_csv("erp.csv")
+          web = pd.read_csv("web.csv")
+          liaison = pd.read_csv("liaison.csv")
+
+          if erp["product_id"].duplicated().any():
+              raise ValueError("Doublons ERP détectés")
+          if web["sku"].duplicated().any():
+              raise ValueError("Doublons WEB détectés")
+          if liaison["product_id"].duplicated().any():
+              raise ValueError("Doublons LIAISON détectés")
+
+          print("✅ Tests d’absence de doublons réussis")
+
+      - id: test_absence_valeurs_manquantes
+        type: io.kestra.plugin.scripts.python.Script
+        containerImage: python:3.11-slim
+        retry:
+          type: constant
+          interval: PT5S
+          maxAttempt: 4
+        beforeCommands:
+          - pip install pandas==1.5.3 numpy==1.24.4
+        inputFiles:
+          erp.csv: "{{ outputs.clean_erp.outputFiles['data/erp_clean.csv'] }}"
+          web.csv: "{{ outputs.clean_web.outputFiles['data/web_clean.csv'] }}"
+          liaison.csv: "{{ outputs.clean_liaison.outputFiles['data/liaison_clean.csv'] }}"
+        script: |
+          import pandas as pd
+
+          erp = pd.read_csv("erp.csv")
+          web = pd.read_csv("web.csv")
+          liaison = pd.read_csv("liaison.csv")
+
+          erp_nulls = erp[["product_id","price","stock_quantity"]].isnull().sum().sum()
+          web_nulls = web[["sku","post_title","total_sales"]].isnull().sum().sum()
+          liaison_nulls = liaison[["product_id","id_web"]].isnull().sum().sum()
+
+          if erp_nulls != 0:
+              raise ValueError(f"Valeurs manquantes ERP: {erp_nulls}")
+          if web_nulls != 0:
+              raise ValueError(f"Valeurs manquantes WEB: {web_nulls}")
+          if liaison_nulls != 0:
+              raise ValueError(f"Valeurs manquantes LIAISON: {liaison_nulls}")
+
+          print("✅ Tests d’absence de valeurs manquantes réussis")
+
+  # ============================================================
+  # PHASE 3 — JOINTURES / FUSION
+  # ============================================================
+  - id: test_join_coherence
+    type: io.kestra.plugin.scripts.python.Script
+    containerImage: python:3.11-slim
+    retry:
+      type: constant
+      interval: PT5S
+      maxAttempt: 4
+    beforeCommands:
+      - pip install pandas==1.5.3 numpy==1.24.4
+    inputFiles:
+      erp.csv: "{{ outputs.clean_erp.outputFiles['data/erp_clean.csv'] }}"
+      web.csv: "{{ outputs.clean_web.outputFiles['data/web_clean.csv'] }}"
+      liaison.csv: "{{ outputs.clean_liaison.outputFiles['data/liaison_clean.csv'] }}"
+    outputFiles:
+      - audit/join_coherence.json
+    script: |
+      import json
+      from pathlib import Path
+      import pandas as pd
+
+      Path("audit").mkdir(parents=True, exist_ok=True)
+
+      erp = pd.read_csv("erp.csv")
+      web = pd.read_csv("web.csv")
+      liaison = pd.read_csv("liaison.csv")
+
+      erp_keys = set(pd.to_numeric(erp["product_id"], errors="coerce").dropna().astype(int).tolist())
+      liaison_erp_keys = set(pd.to_numeric(liaison["product_id"], errors="coerce").dropna().astype(int).tolist())
+      web_keys = set(web["sku"].astype(str).str.strip().tolist())
+      liaison_web_keys = set(liaison["id_web"].astype(str).str.strip().tolist())
+
+      bad_erp = int(len(liaison_erp_keys - erp_keys))
+      bad_web = int(len(liaison_web_keys - web_keys))
+      pct_bad_web = round((bad_web / len(liaison) * 100), 2) if len(liaison) > 0 else 0.0
+
+      result = {
+          "bad_join_erp": bad_erp,
+          "bad_join_web": bad_web,
+          "pct_bad_web": pct_bad_web
+      }
+
+      with open("audit/join_coherence.json", "w", encoding="utf-8") as f:
+          json.dump(result, f, indent=2, ensure_ascii=False)
+
+      print("✅ Test de cohérence des jointures exécuté")
+      print(json.dumps(result, indent=2, ensure_ascii=False))
+
+      if bad_erp != 0:
+          raise ValueError(f"Jointures ERP invalides: {bad_erp}")
+      if pct_bad_web > 5:
+          raise ValueError(f"Trop d'erreurs de jointure WEB: {pct_bad_web}%")
+
+  - id: create_valid_links
+    type: io.kestra.plugin.scripts.python.Script
+    containerImage: python:3.11-slim
+    retry:
+      type: constant
+      interval: PT5S
+      maxAttempt: 4
+    beforeCommands:
+      - pip install pandas==1.5.3 numpy==1.24.4
+    inputFiles:
+      erp.csv: "{{ outputs.clean_erp.outputFiles['data/erp_clean.csv'] }}"
+      web.csv: "{{ outputs.clean_web.outputFiles['data/web_clean.csv'] }}"
+      liaison.csv: "{{ outputs.clean_liaison.outputFiles['data/liaison_clean.csv'] }}"
+    outputFiles:
+      - data/valid_links.csv
+      - audit/valid_links.json
+    script: |
+      import json
+      from pathlib import Path
+      import pandas as pd
+
+      Path("data").mkdir(parents=True, exist_ok=True)
+      Path("audit").mkdir(parents=True, exist_ok=True)
+
+      erp = pd.read_csv("erp.csv")
+      web = pd.read_csv("web.csv")
+      liaison = pd.read_csv("liaison.csv")
+
+      erp["product_id"] = pd.to_numeric(erp["product_id"], errors="coerce")
+      liaison["product_id"] = pd.to_numeric(liaison["product_id"], errors="coerce")
+      liaison["id_web"] = liaison["id_web"].astype(str).str.strip()
+      web["sku"] = web["sku"].astype(str).str.strip()
+
+      valid = liaison[
+          liaison["product_id"].isin(erp["product_id"]) &
+          liaison["id_web"].isin(web["sku"])
+      ].copy()
+
+      if valid.empty:
+          raise ValueError("Aucune liaison valide")
+
+      valid.to_csv("data/valid_links.csv", index=False)
+
+      result = {"valid_rows": int(len(valid))}
+      with open("audit/valid_links.json", "w", encoding="utf-8") as f:
+          json.dump(result, f, indent=2, ensure_ascii=False)
+
+      print("=== VALID LINKS ===")
+      print(json.dumps(result, indent=2, ensure_ascii=False))
+
+  - id: merge_final
+    type: io.kestra.plugin.scripts.python.Script
+    containerImage: python:3.11-slim
+    retry:
+      type: constant
+      interval: PT5S
+      maxAttempt: 4
+    beforeCommands:
+      - pip install pandas==1.5.3 numpy==1.24.4
+    inputFiles:
+      erp.csv: "{{ outputs.clean_erp.outputFiles['data/erp_clean.csv'] }}"
+      web.csv: "{{ outputs.clean_web.outputFiles['data/web_clean.csv'] }}"
+      valid_links.csv: "{{ outputs.create_valid_links.outputFiles['data/valid_links.csv'] }}"
+    outputFiles:
+      - data/final.csv
+      - audit/final_metrics.json
+    script: |
+      import json
+      from pathlib import Path
+      import pandas as pd
+
+      Path("data").mkdir(parents=True, exist_ok=True)
+      Path("audit").mkdir(parents=True, exist_ok=True)
+
+      erp = pd.read_csv("erp.csv")
+      web = pd.read_csv("web.csv")
+      valid = pd.read_csv("valid_links.csv")
+
+      final = erp.merge(valid, on="product_id", how="inner")
+      final = final.merge(web, left_on="id_web", right_on="sku", how="inner")
+
+      if final.empty:
+          raise ValueError("Fusion finale vide")
+
+      final.to_csv("data/final.csv", index=False)
+
+      metrics = {
+          "rows_final": int(len(final)),
+          "columns": list(final.columns)
+      }
+
+      with open("audit/final_metrics.json", "w", encoding="utf-8") as f:
+          json.dump(metrics, f, indent=2, ensure_ascii=False)
+
+      print("=== FINAL MERGE ===")
+      print(json.dumps(metrics, indent=2, ensure_ascii=False))
+
+  # ============================================================
+  # PHASE 4 — CA
+  # ============================================================
+  - id: compute_ca
+    type: io.kestra.plugin.scripts.python.Script
+    containerImage: python:3.11-slim
+    retry:
+      type: constant
+      interval: PT5S
+      maxAttempt: 4
+    beforeCommands:
+      - pip install pandas==1.5.3 numpy==1.24.4
+    inputFiles:
+      final.csv: "{{ outputs.merge_final.outputFiles['data/final.csv'] }}"
+    outputFiles:
+      - data/ca.csv
+      - audit/ca_metrics.json
+    script: |
+      import json
+      from pathlib import Path
+      import pandas as pd
+
+      Path("data").mkdir(parents=True, exist_ok=True)
+      Path("audit").mkdir(parents=True, exist_ok=True)
+
+      df = pd.read_csv("final.csv")
+
+      df["price"] = pd.to_numeric(df["price"], errors="coerce")
+      df["total_sales"] = pd.to_numeric(df["total_sales"], errors="coerce")
+      df = df.dropna(subset=["price", "total_sales"]).copy()
+
+      if df.empty:
+          raise ValueError("Aucune ligne exploitable pour le CA")
+
+      df["ca"] = df["price"] * df["total_sales"]
+
+      ca_total = round(float(df["ca"].sum()), 2)
+
+      df.to_csv("data/ca.csv", index=False)
+
+      metrics = {
+          "rows_used": int(len(df)),
+          "ca_total": ca_total
+      }
+
+      with open("audit/ca_metrics.json", "w", encoding="utf-8") as f:
+          json.dump(metrics, f, indent=2, ensure_ascii=False)
+
+      print("=== CA METRICS ===")
+      print(json.dumps(metrics, indent=2, ensure_ascii=False))
+
+  - id: test_ca_coherence
+    type: io.kestra.plugin.scripts.python.Script
+    containerImage: python:3.11-slim
+    retry:
+      type: constant
+      interval: PT5S
+      maxAttempt: 4
+    beforeCommands:
+      - pip install pandas==1.5.3 numpy==1.24.4
+    inputFiles:
+      ca.csv: "{{ outputs.compute_ca.outputFiles['data/ca.csv'] }}"
+    script: |
+      import pandas as pd
+
+      df = pd.read_csv("ca.csv")
+
+      if df.empty:
+          raise ValueError("ca.csv vide")
+      if "ca" not in df.columns:
+          raise ValueError("Colonne ca absente")
+      if (df["ca"] < 0).any():
+          raise ValueError("CA négatif détecté")
+
+      print("✅ Test de cohérence du chiffre d'affaires réussi")
+
+  # ============================================================
+  # PHASE 4 — Z-SCORE
+  # ============================================================
+  - id: zscore_segmentation
+    type: io.kestra.plugin.scripts.python.Script
+    containerImage: python:3.11-slim
+    retry:
+      type: constant
+      interval: PT5S
+      maxAttempt: 4
+    beforeCommands:
+      - pip install pandas==1.5.3 numpy==1.24.4
+    inputFiles:
+      ca.csv: "{{ outputs.compute_ca.outputFiles['data/ca.csv'] }}"
+    outputFiles:
+      - data/vins_premium.csv
+      - data/vins_ordinaires.csv
+      - audit/zscore_metrics.json
+    script: |
+      import json
+      from pathlib import Path
+      import pandas as pd
+
+      Path("data").mkdir(parents=True, exist_ok=True)
+      Path("audit").mkdir(parents=True, exist_ok=True)
+
+      df = pd.read_csv("ca.csv")
+
+      df["price"] = pd.to_numeric(df["price"], errors="coerce")
+      df = df.dropna(subset=["price"]).copy()
+
+      if df.empty:
+          raise ValueError("Aucune donnée de prix pour le z-score")
+
+      mean_price = float(df["price"].mean())
+      std_price = float(df["price"].std())
+
+      if std_price == 0:
+          raise ValueError("Écart-type nul")
+
+      df["zscore"] = (df["price"] - mean_price) / std_price
+
+      premium = df[df["zscore"] > 2].copy()
+      ordinary = df[df["zscore"] <= 2].copy()
+
+      premium.to_csv("data/vins_premium.csv", index=False)
+      ordinary.to_csv("data/vins_ordinaires.csv", index=False)
+
+      metrics = {
+          "mean_price": round(mean_price, 4),
+          "std_price": round(std_price, 4),
+          "premium_count": int(len(premium)),
+          "ordinary_count": int(len(ordinary)),
+          "total_count": int(len(df))
+      }
+
+      with open("audit/zscore_metrics.json", "w", encoding="utf-8") as f:
+          json.dump(metrics, f, indent=2, ensure_ascii=False)
+
+      print("=== ZSCORE METRICS ===")
+      print(json.dumps(metrics, indent=2, ensure_ascii=False))
+
+  - id: test_zscore_prix
+    type: io.kestra.plugin.scripts.python.Script
+    containerImage: python:3.11-slim
+    retry:
+      type: constant
+      interval: PT5S
+      maxAttempt: 4
+    inputFiles:
+      zscore.json: "{{ outputs.zscore_segmentation.outputFiles['audit/zscore_metrics.json'] }}"
+    script: |
+      import json
+
+      z = json.load(open("zscore.json", encoding="utf-8"))
+
+      if z["premium_count"] + z["ordinary_count"] != z["total_count"]:
+          raise ValueError("Segmentation incohérente")
+      if z["std_price"] == 0:
+          raise ValueError("Écart-type nul")
+
+      print("✅ Test du Z-score sur le prix des vins réussi")
+      print(json.dumps(z, indent=2, ensure_ascii=False))
+
+  # ============================================================
+  # PHASE 4B — PYTEST GÉNÉRAL EN PARALLÈLE
+  # ============================================================
+  - id: pytest_parallel
+    type: io.kestra.plugin.core.flow.Parallel
+    tasks:
+      - id: pytest_data
+        type: io.kestra.plugin.scripts.python.Script
+        containerImage: python:3.11-slim
+        retry:
+          type: constant
+          interval: PT5S
+          maxAttempt: 4
+        beforeCommands:
+          - pip install pandas==1.5.3 numpy==1.24.4 pytest
+        inputFiles:
+          final.csv: "{{ outputs.merge_final.outputFiles['data/final.csv'] }}"
+        script: |
+          import os
+          import subprocess
+          from pathlib import Path
+          import pandas as pd
+
+          Path("data").mkdir(parents=True, exist_ok=True)
+          os.rename("final.csv", "data/final.csv")
+
+          df = pd.read_csv("data/final.csv")
+          print("=== DEBUG FINAL ===")
+          print("Rows:", len(df))
+          print("Columns:", list(df.columns))
+          print(df.head().to_string())
+
+          lines = [
+              "import pandas as pd",
+              "",
+              "def test_not_empty():",
+              "    df = pd.read_csv('data/final.csv')",
+              "    assert len(df) > 0",
+              "",
+              "def test_has_product_id():",
+              "    df = pd.read_csv('data/final.csv')",
+              "    assert 'product_id' in df.columns",
+              "",
+              "def test_no_null_product_id():",
+              "    df = pd.read_csv('data/final.csv')",
+              "    assert df['product_id'].notna().all()",
+          ]
+
+          with open("test_data.py", "w", encoding="utf-8") as f:
+              f.write("\n".join(lines))
+
+          result = subprocess.run(["pytest", "-v", "test_data.py"], capture_output=True, text=True)
+
+          print("=== PYTEST DATA STDOUT ===")
+          print(result.stdout)
+          print("=== PYTEST DATA STDERR ===")
+          print(result.stderr)
+
+          if result.returncode != 0:
+              raise Exception("pytest_data failed")
+
+      - id: pytest_business
+        type: io.kestra.plugin.scripts.python.Script
+        containerImage: python:3.11-slim
+        retry:
+          type: constant
+          interval: PT5S
+          maxAttempt: 4
+        beforeCommands:
+          - pip install pandas==1.5.3 numpy==1.24.4 pytest
+        inputFiles:
+          ca.csv: "{{ outputs.compute_ca.outputFiles['data/ca.csv'] }}"
+        script: |
+          import os
+          import subprocess
+          from pathlib import Path
+          import pandas as pd
+
+          Path("data").mkdir(parents=True, exist_ok=True)
+          os.rename("ca.csv", "data/ca.csv")
+
+          df = pd.read_csv("data/ca.csv")
+          print("=== DEBUG CA ===")
+          print("Rows:", len(df))
+          print("Columns:", list(df.columns))
+          print(df.head().to_string())
+
+          lines = [
+              "import pandas as pd",
+              "",
+              "def test_ca_exists():",
+              "    df = pd.read_csv('data/ca.csv')",
+              "    assert 'ca' in df.columns",
+              "",
+              "def test_ca_non_negative():",
+              "    df = pd.read_csv('data/ca.csv')",
+              "    assert (df['ca'] >= 0).all()",
+          ]
+
+          with open("test_business.py", "w", encoding="utf-8") as f:
+              f.write("\n".join(lines))
+
+          result = subprocess.run(["pytest", "-v", "test_business.py"], capture_output=True, text=True)
+
+          print("=== PYTEST BUSINESS STDOUT ===")
+          print(result.stdout)
+          print("=== PYTEST BUSINESS STDERR ===")
+          print(result.stderr)
+
+          if result.returncode != 0:
+              raise Exception("pytest_business failed")
+
+  # ============================================================
+  # PHASE 5 — DASHBOARD / RÉCAP
+  # ============================================================
+  - id: summary_dashboard
+    type: io.kestra.plugin.scripts.python.Script
+    containerImage: python:3.11-slim
+    retry:
+      type: constant
+      interval: PT5S
+      maxAttempt: 4
+    beforeCommands:
+      - pip install pandas==1.5.3 numpy==1.24.4
+    inputFiles:
+      erp.json: "{{ outputs.clean_erp.outputFiles['audit/erp_metrics.json'] }}"
+      web.json: "{{ outputs.clean_web.outputFiles['audit/web_metrics.json'] }}"
+      liaison.json: "{{ outputs.clean_liaison.outputFiles['audit/liaison_metrics.json'] }}"
+      final.json: "{{ outputs.merge_final.outputFiles['audit/final_metrics.json'] }}"
+      ca.json: "{{ outputs.compute_ca.outputFiles['audit/ca_metrics.json'] }}"
+      zscore.json: "{{ outputs.zscore_segmentation.outputFiles['audit/zscore_metrics.json'] }}"
+    outputFiles:
+      - metrics/dashboard_metrics.csv
+      - metrics/final_summary.json
+    script: |
+      import json
+      from pathlib import Path
+      import pandas as pd
+
+      Path("metrics").mkdir(parents=True, exist_ok=True)
+
+      erp = json.load(open("erp.json", encoding="utf-8"))
+      web = json.load(open("web.json", encoding="utf-8"))
+      liaison = json.load(open("liaison.json", encoding="utf-8"))
+      final = json.load(open("final.json", encoding="utf-8"))
+      ca = json.load(open("ca.json", encoding="utf-8"))
+      z = json.load(open("zscore.json", encoding="utf-8"))
+
+      dashboard = pd.DataFrame([
+          {"metric": "erp_after_dedup", "expected": 825, "actual": erp["clean_rows"]},
+          {"metric": "liaison_after_dedup", "expected": 825, "actual": liaison["clean_rows"]},
+          {"metric": "web_after_cleaning", "expected": 1428, "actual": web["products_rows_after_filter"]},
+          {"metric": "web_after_dedup", "expected": 714, "actual": web["clean_rows_after_dedup"]},
+          {"metric": "merged_rows", "expected": 714, "actual": final["rows_final"]},
+          {"metric": "ca_total", "expected": 70568.60, "actual": ca["ca_total"]},
+          {"metric": "premium_count", "expected": 30, "actual": z["premium_count"]}
+      ])
+
+      dashboard.to_csv("metrics/dashboard_metrics.csv", index=False)
+
+      summary = {
+          "comparison": dashboard.to_dict(orient="records"),
+          "actual": {
+              "erp_after_dedup": erp["clean_rows"],
+              "liaison_after_dedup": liaison["clean_rows"],
+              "web_after_cleaning": web["products_rows_after_filter"],
+              "web_after_dedup": web["clean_rows_after_dedup"],
+              "merged_rows": final["rows_final"],
+              "ca_total": ca["ca_total"],
+              "premium_count": z["premium_count"]
+          }
+      }
+
+      with open("metrics/final_summary.json", "w", encoding="utf-8") as f:
+          json.dump(summary, f, indent=2, ensure_ascii=False)
+
+      print("")
+      print("===== RÉCAPITULATIF FINAL =====")
+      print("")
+      print("Après dédoublonnage du fichier erp :", erp["clean_rows"], "lignes")
+      print("Après dédoublonnage du fichier liaison :", liaison["clean_rows"], "lignes")
+      print("Après nettoyage du fichier web :", web["products_rows_after_filter"], "lignes")
+      print("Après dédoublonnage du fichier web :", web["clean_rows_after_dedup"], "lignes")
+      print("Fichier fusionné :", final["rows_final"], "lignes")
+      print("Le chiffre d'affaires total réalisé est de", ca["ca_total"], "euros")
+      print("Nombre de vins millésimes détectés :", z["premium_count"])
+      print("")
+      print("===== COMPARAISON AVEC LES VALEURS ATTENDUES =====")
+      print(dashboard.to_string(index=False))
+
+  # ============================================================
+  # PHASE 6 — EXPORTS FINAUX
+  # ============================================================
+  - id: export_outputs
+    type: io.kestra.plugin.scripts.python.Script
+    containerImage: python:3.11-slim
+    retry:
+      type: constant
+      interval: PT5S
+      maxAttempt: 4
+    beforeCommands:
+      - pip install pandas==1.5.3 numpy==1.24.4 openpyxl
+    inputFiles:
+      final.csv: "{{ outputs.merge_final.outputFiles['data/final.csv'] }}"
+      ca.csv: "{{ outputs.compute_ca.outputFiles['data/ca.csv'] }}"
+      premium.csv: "{{ outputs.zscore_segmentation.outputFiles['data/vins_premium.csv'] }}"
+      ordinary.csv: "{{ outputs.zscore_segmentation.outputFiles['data/vins_ordinaires.csv'] }}"
+      dashboard.csv: "{{ outputs.summary_dashboard.outputFiles['metrics/dashboard_metrics.csv'] }}"
+      summary.json: "{{ outputs.summary_dashboard.outputFiles['metrics/final_summary.json'] }}"
+    outputFiles:
+      - outputs/consolidation.xlsx
+      - outputs/ca_par_produit.csv
+      - outputs/vins_premium.csv
+      - outputs/vins_ordinaires.csv
+      - outputs/dashboard_metrics.csv
+      - outputs/final_summary.json
+    script: |
+      import shutil
+      from pathlib import Path
+      import pandas as pd
+
+      Path("outputs").mkdir(parents=True, exist_ok=True)
+
+      final = pd.read_csv("final.csv")
+      final.to_excel("outputs/consolidation.xlsx", index=False)
+
+      shutil.copy("ca.csv", "outputs/ca_par_produit.csv")
+      shutil.copy("premium.csv", "outputs/vins_premium.csv")
+      shutil.copy("ordinary.csv", "outputs/vins_ordinaires.csv")
+      shutil.copy("dashboard.csv", "outputs/dashboard_metrics.csv")
+      shutil.copy("summary.json", "outputs/final_summary.json")
+
+      print("✅ Fichiers finaux exportés dans outputs/")
+
+  - id: end
+    type: io.kestra.plugin.core.log.Log
+    message: |
+      ✅ Workflow complet terminé
+
+      Fichiers finaux produits dans la tâche export_outputs :
+      - outputs/consolidation.xlsx
+      - outputs/ca_par_produit.csv
+      - outputs/vins_premium.csv
+      - outputs/vins_ordinaires.csv
+      - outputs/dashboard_metrics.csv
+      - outputs/final_summary.json
+
+      Résultats visibles dans :
+      - tests_quality
+      - test_join_coherence
+      - test_ca_coherence
+      - test_zscore_prix
+      - summary_dashboard

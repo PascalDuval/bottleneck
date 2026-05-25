@@ -1,0 +1,31 @@
+﻿product_id,id_web,sku,post_title,post_status,onsale_web,price,stock_quantity,stock_status,total_sales,average_rating,rating_count,post_date,post_modified,ca_produit,z_score_price,premium_zscore,premium_iqr,premium_flag
+4115,15382,15382,Zind-Humbrecht Riesling Grand Cru Rangen De Thann Clos Saint-Urbain 2017,publish,1,100.0,11,instock,0.0,0.0,0,2018-02-13 11:08:45,2020-02-08 11:45:02,0.0,2.4290870583161297,True,True,PREMIUM
+4132,11668,11668,Zind-Humbrecht Pinot Gris Grand Cru Rangen De Thann Clos Saint-Urbain 2012,publish,1,88.4,5,instock,0.0,0.0,0,2018-02-13 11:43:55,2020-02-20 09:55:02,0.0,2.011686386285742,True,True,PREMIUM
+4352,15940,15940,Champagne Egly-Ouriet Grand Cru Millésimé 2008,publish,1,225.0,0,outofstock,5.0,0.0,0,2018-03-02 10:30:04,2020-03-07 11:18:45,1125.0,6.926939127609108,True,True,PREMIUM
+4355,12589,12589,Champagne Egly-Ouriet Grand Cru Blanc de Noirs,publish,1,126.5,2,instock,11.0,0.0,0,2018-03-02 10:46:10,2020-08-13 10:15:02,1391.5,3.382631697006241,True,True,PREMIUM
+4402,3510,3510,Cognac Frapin VIP XO,publish,1,176.0,8,instock,13.0,0.0,0,2018-03-22 11:21:05,2020-08-22 11:35:03,2288.0,5.163781116446261,True,True,PREMIUM
+4404,3507,3507,Cognac Frapin Château de Fontpinot XO,publish,1,108.5,2,instock,2.0,0.0,0,2018-03-22 11:32:55,2020-08-12 09:30:16,217.0,2.734940999028052,True,True,PREMIUM
+4406,7819,7819,Cognac Frapin Château de Fontpinot 1989 20 Ans d'Age,publish,1,157.0,3,instock,0.0,0.0,0,2018-03-22 11:42:48,2020-03-14 16:05:04,0.0,4.480107601913728,True,True,PREMIUM
+4407,3509,3509,Cognac Frapin Cigar Blend,publish,1,104.0,6,instock,1.0,0.0,0,2018-03-22 11:49:53,2020-07-04 09:45:03,104.0,2.573018324533505,True,True,PREMIUM
+4582,12857,12857,Château de Meursault Puligny-Montrachet 1er Cru Champ Canet 2014,publish,1,109.6,7,instock,0.0,0.0,0,2018-04-12 17:56:13,2020-02-06 16:35:02,0.0,2.7745220972378304,True,True,PREMIUM
+4903,14805,14805,Domaine Des Croix Corton Grand Cru Les Grèves 2017,publish,1,102.3,20,instock,0.0,0.0,0,2018-05-15 10:10:57,2020-06-27 09:00:07,0.0,2.5118475363911212,True,True,PREMIUM
+4904,14220,14220,Domaine Des Croix Corton Charlemagne Grand Cru 2016,publish,1,137.0,13,instock,5.0,0.0,0,2018-05-15 10:23:41,2020-05-19 17:15:02,685.0,3.7604512708268514,True,True,PREMIUM
+5001,14581,14581,David Duband Charmes-Chambertin Grand Cru 2014,publish,1,217.5,20,instock,0.0,0.0,0,2018-07-17 09:45:39,2020-05-16 09:00:05,0.0,6.6570680034515295,True,True,PREMIUM
+5007,12791,12791,Domaine des Comtes Lafon Volnay 1er Cru Santenots du Milieu 2014,publish,1,105.0,17,instock,0.0,0.0,0,2018-07-17 10:36:03,2020-07-02 09:30:03,0.0,2.609001141087849,True,True,PREMIUM
+5008,11602,11602,Domaine des Comtes Lafon Volnay 1er Cru Santenots du Milieu 2013,publish,1,105.0,10,instock,0.0,0.0,0,2018-07-17 10:52:41,2020-06-23 15:35:02,0.0,2.609001141087849,True,True,PREMIUM
+5025,13914,13914,Champagne Agrapart &amp; Fils L'Avizoise Extra Brut Blanc de Blancs Grand Cru 2012,publish,1,112.0,0,outofstock,0.0,0.0,0,2018-07-18 10:39:43,2020-07-09 17:05:02,0.0,2.860880856968256,True,True,PREMIUM
+5565,19822,19822,Tempier Bandol Cabassaou 2017,publish,1,92.0,0,outofstock,0.0,0.0,0,2018-11-26 10:59:10,2020-01-04 13:57:04,0.0,2.1412245258813796,True,True,PREMIUM
+5612,14915,14915,Domaine Weinbach Gewurztraminer Grand Cru Furstentum SGN 2010 1/2,publish,1,124.8,12,instock,0.0,0.0,0,2019-01-15 15:30:49,2019-01-23 09:33:57,0.0,3.321460908863857,True,True,PREMIUM
+5767,15185,15185,Camille Giroud Clos de Vougeot 2016,publish,1,175.0,12,instock,0.0,0.0,0,2019-03-13 14:43:22,2020-06-11 15:25:04,0.0,5.127798299891917,True,True,PREMIUM
+5892,14983,14983,Coteaux Champenois Egly-Ouriet Ambonnay Rouge 2016,publish,1,191.3,10,instock,3.0,0.0,0,2019-03-28 10:21:36,2020-04-01 09:30:09,573.9000000000001,5.714318209727722,True,True,PREMIUM
+5916,14774,14774,Wemyss Malts Single Cask Scotch Whisky Chocolate Moka Cake 2005 Strathclyde,publish,1,93.0,3,instock,0.0,0.0,0,2019-04-04 16:39:24,2019-12-23 09:30:21,0.0,2.1772073424357234,True,True,PREMIUM
+5917,14775,14775,Wemyss Malts Single Cask Scotch Whisky Choc 'n' Nut Pretzel 2001 Bunnahabhain,publish,1,122.0,4,instock,0.0,0.0,0,2019-04-04 16:49:37,2020-03-11 09:30:09,0.0,3.220709022511694,True,True,PREMIUM
+5918,14773,14773,Wemyss Malts Single Cask Scotch Whisky Chai Caramel Latte 2002 Craigellachie,publish,1,114.0,8,instock,0.0,0.0,0,2019-04-04 17:01:54,2020-07-31 18:25:03,0.0,2.9328464900769435,True,True,PREMIUM
+6126,14923,14923,Champagne Gosset Célébris Vintage 2007,publish,1,135.0,10,instock,2.0,0.0,0,2019-06-28 17:22:27,2020-08-27 11:45:02,270.0,3.6884856377181636,True,True,PREMIUM
+6201,14596,14596,David Duband Chambolle-Musigny 1er Cru Les Sentiers 2016,publish,1,105.6,7,instock,0.0,0.0,0,2019-07-23 10:37:14,2020-02-29 15:25:02,0.0,2.6305908310204553,True,True,PREMIUM
+6202,15126,15126,Domaine Clerget Echezeaux Grand Cru En Orveaux 2015,publish,1,116.4,14,instock,0.0,0.0,0,2019-07-23 10:50:24,2020-06-06 15:45:01,0.0,3.019205249807369,True,True,PREMIUM
+6212,13996,13996,Domaine des Comtes Lafon Volnay 1er Cru Santenots du Milieu 2015,publish,1,115.0,2,instock,2.0,0.0,0,2019-07-25 09:09:17,2020-06-16 09:30:16,230.0,2.9688293066312874,True,True,PREMIUM
+6213,15072,15072,Domaine des Comtes Lafon Volnay 1er Cru Santenots du Milieu 2016,publish,1,121.0,7,instock,0.0,0.0,0,2019-07-25 09:10:32,2020-06-25 09:30:06,0.0,3.1847262059573502,True,True,PREMIUM
+6214,11601,11601,Domaine des Comtes Lafon Volnay 1er Cru Champans 2013,publish,1,99.0,7,instock,0.0,0.0,0,2019-07-25 09:15:41,2020-07-04 11:35:02,0.0,2.3931042417617863,True,True,PREMIUM
+6215,12790,12790,Domaine des Comtes Lafon Volnay 1er Cru Champans 2014,publish,1,115.0,4,instock,0.0,0.0,0,2019-07-25 09:30:16,2019-11-04 09:30:25,0.0,2.9688293066312874,True,True,PREMIUM
+6216,15070,15070,Domaine des Comtes Lafon Volnay 1er Cru Champans 2016,publish,1,121.0,6,instock,0.0,0.0,0,2019-07-25 09:31:09,2020-07-30 09:30:08,0.0,3.1847262059573502,True,True,PREMIUM
