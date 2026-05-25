@@ -26,3 +26,6 @@ Kestra/output/
 
 # Archive and legacy folder
 old/
+
+# Documentation Word files
+documentation/*.docx
