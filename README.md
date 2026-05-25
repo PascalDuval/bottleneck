@@ -6,6 +6,30 @@ Ce projet couvre le perimetre Bottleneck : reconciliation des donnees ERP, web e
 
 Ce projet contient des scripts Python qui consolident des données ERP, liaison et web, puis exportent le résultat dans des fichiers Excel et CSV.
 
+## Démarrage rapide
+
+Si tu veux faire tourner le projet de bout en bout, voici l'ordre recommandé.
+
+1. Cloner le dépôt.
+2. Ouvrir un terminal PowerShell à la racine du projet.
+3. Créer l'environnement virtuel avec `py -3 -m venv .venv`.
+4. Activer l'environnement avec :
+   ```powershell
+   .\.venv\Scripts\Activate.ps1
+   ```
+5. Installer les dépendances avec `pip install -r requirements.txt`.
+6. Placer les fichiers d'entrée dans [data](data) ou dans [Kestra/incoming](Kestra/incoming) selon le mode d'exécution choisi.
+7. Lancer le script adapté au besoin.
+
+Ordre conseillé des scripts à exécuter :
+
+1. [run_build.ps1](run_build.ps1) pour un lancement simple sous Windows.
+2. [nettoyage_reconciliation.py](nettoyage_reconciliation.py) pour la version Pandas.
+3. [nettoyage_reconciliation_DuckDB.py](nettoyage_reconciliation_DuckDB.py) pour la version DuckDB, recommandée.
+4. Le workflow Kestra [Kestra/flows/orchestration_vins_duckdb.yaml](Kestra/flows/orchestration_vins_duckdb.yaml) si tu veux l'orchestration complète et visible.
+
+En pratique, la version DuckDB est celle que je recommande pour vérifier le projet, car elle est plus lisible pour l'orchestration, plus robuste sur les gros volumes et plus proche d'un pipeline de production.
+
 Il existe deux versions :
 - **`nettoyage_reconciliation.py`** : version classique avec Pandas
 - **`nettoyage_reconciliation_DuckDB.py`** : version avec DuckDB (recommandée pour les gros volumes)
@@ -111,6 +135,34 @@ Il ne s'agit **pas** d'une suite de tests `pytest` séparée : si une assertion 
    ```
 
 > Si `py` n'est pas reconnu, installe Python depuis https://www.python.org/downloads/ et coche l'option "Add Python to PATH" pendant l'installation.
+
+## Pourquoi Kestra
+
+J'ai choisi Kestra pour présenter le workflow parce que l'outil rend l'orchestration explicite et facile à suivre.
+
+- Le graphe du workflow montre l'ordre des étapes et les branchements.
+- Les tâches peuvent s'exécuter en parallèle quand c'est pertinent.
+- Les contrôles qualité apparaissent directement dans l'interface.
+- Le workflow peut être rejoué avec les mêmes entrées, ce qui améliore la reproductibilite.
+- Le déclenchement planifié permet de montrer un vrai scénario d'automatisation.
+
+Le fichier d'orchestration principal est [Kestra/flows/orchestration_vins_duckdb.yaml](Kestra/flows/orchestration_vins_duckdb.yaml).
+
+## Faire tourner Kestra en local
+
+1. Démarre les services avec :
+   ```powershell
+   docker compose up -d
+   ```
+2. Ouvre l'interface Kestra dans le navigateur à l'adresse :
+   ```text
+   http://localhost:8080
+   ```
+3. Importe le workflow contenu dans [Kestra/flows/orchestration_vins_duckdb.yaml](Kestra/flows/orchestration_vins_duckdb.yaml).
+4. Fournis les trois fichiers d'entrée demandés par le flow : ERP, WEB et liaison.
+5. Lance l'exécution depuis l'interface pour suivre les étapes, les tests et les sorties.
+
+Le stack Docker utilisé par le projet est défini dans [docker-compose.yml](docker-compose.yml) et démarre deux services : PostgreSQL pour le stockage interne de Kestra, puis Kestra sur le port 8080.
 
 ## Lancement du script
 
